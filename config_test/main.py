@@ -1,5 +1,3 @@
-# """
-# 1引入模块
 import argparse
 import os.path as osp
 
@@ -30,9 +28,8 @@ def main():
     mkdir_or_exist(osp.abspath(cfg.work_dir))
     cfg.dump(osp.join(cfg.work_dir, osp.basename(args.config)))
 
-
     print(cfg)
-    print(cfg.square ** 2)
+    # print(cfg.square ** 2)
 
 if __name__ == "__main__":
     main()
