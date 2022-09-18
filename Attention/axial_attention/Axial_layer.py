@@ -100,6 +100,8 @@ class Axial_Layer(nn.Module):
         #     output = output.permute(0, 2, 1, 3)
 
         return output
+
+
 class MixConv2d(nn.Module):
     def __init__(
         self,
