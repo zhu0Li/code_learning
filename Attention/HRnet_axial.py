@@ -280,7 +280,7 @@ class StageModule(nn.Module):
         self.branches = nn.ModuleList()
         for i in range(self.input_branches):  # 每个分支上都先通过4个BasicBlock
             w = c * (2 ** i)  # 对应第i个分支的通道数
-            if i >= 1:
+            if i >= 1:  #在最高分辨率处还是使用原来的block，下面四个分辨率使用Attention block
                 branch = nn.Sequential(
                     HRViTAxialBlock(w, w, H=H // 2 ** i, W=W),
                     # HRViTAxialBlock(w, w, H=H // 2 ** i, W=W),
@@ -298,6 +298,7 @@ class StageModule(nn.Module):
                     BasicBlock(w, w),
                     BasicBlock(w, w)
                 )
+
             self.branches.append(branch)
 
         self.fuse_layers = nn.ModuleList()  # 用于融合每个分支上的输出
@@ -361,6 +362,7 @@ class StageModule(nn.Module):
 class HighResolutionNet(nn.Module):
     def __init__(self,input_channel, base_channel: int = 32, in_H:int=6144,in_W:int=1,num_joints: int = 17, num_classes: int=7):
         super(HighResolutionNet, self).__init__()
+        self.n_stem = 4
         # Stem
         self.conv1_ = nn.Conv2d(input_channel, 64, kernel_size=1, stride=1, padding=0, bias=False)
         self.conv1 = nn.Conv2d(input_channel, 64, kernel_size=3, stride=(2,1), padding=1, bias=False)
@@ -398,8 +400,9 @@ class HighResolutionNet(nn.Module):
 
         # Stage2
         self.stage2 = nn.Sequential(
-            StageModule(input_branches=2, output_branches=2, c=base_channel,H=in_H//4,W=in_W)
+            StageModule(input_branches=2, output_branches=2, c=base_channel,H=in_H//self.n_stem,W=in_W)
         )
+
 
         # transition2
         self.transition2 = nn.ModuleList([
@@ -414,12 +417,18 @@ class HighResolutionNet(nn.Module):
             )
         ])
 
+        # stage2 conv
+        self.conv_stage2 = nn.Sequential(
+            nn.Conv2d(base_channel,base_channel, kernel_size=(1,3), padding=(0,0), bias=False),
+            nn.Conv2d(base_channel * 2,base_channel * 2, kernel_size=(1,3), padding=(0,0), bias=False),
+            nn.Conv2d(base_channel * 4,base_channel * 4, kernel_size=(1,3), padding=(0,0), bias=False)
+        )
         # Stage3
         self.stage3 = nn.Sequential(
-            StageModule(input_branches=3, output_branches=3, c=base_channel,H=in_H//4,W=in_W),
-            StageModule(input_branches=3, output_branches=3, c=base_channel,H=in_H//4,W=in_W),
-            StageModule(input_branches=3, output_branches=3, c=base_channel,H=in_H//4,W=in_W),
-            StageModule(input_branches=3, output_branches=3, c=base_channel,H=in_H//4,W=in_W)
+            StageModule(input_branches=3, output_branches=3, c=base_channel,H=in_H//self.n_stem,W=in_W//2+1),
+            StageModule(input_branches=3, output_branches=3, c=base_channel,H=in_H//self.n_stem,W=in_W//2+1),
+            StageModule(input_branches=3, output_branches=3, c=base_channel,H=in_H//self.n_stem,W=in_W//2+1),
+            StageModule(input_branches=3, output_branches=3, c=base_channel,H=in_H//self.n_stem,W=in_W//2+1)
         )
 
         # transition3
@@ -436,11 +445,19 @@ class HighResolutionNet(nn.Module):
             )
         ])
 
+        # stage3 conv
+        self.conv_stage3 = nn.Sequential(
+            nn.Conv2d(base_channel,base_channel, kernel_size=(1,3), padding=(0,0), bias=False),
+            nn.Conv2d(base_channel * 2,base_channel * 2, kernel_size=(1,3), padding=(0,0), bias=False),
+            nn.Conv2d(base_channel * 4,base_channel * 4, kernel_size=(1,3), padding=(0,0), bias=False),
+            nn.Conv2d(base_channel * 8,base_channel * 8, kernel_size=(1,3), padding=(0,0), bias=False)
+        )
+
         # Stage4
         # 注意，最后一个StageModule只输出分辨率最高的特征层
         self.stage4 = nn.Sequential(
-            StageModule(input_branches=4, output_branches=4, c=base_channel,H=in_H//4,W=in_W),
-            StageModule(input_branches=4, output_branches=4, c=base_channel,H=in_H//4,W=in_W),
+            StageModule(input_branches=4, output_branches=4, c=base_channel,H=in_H//self.n_stem,W=in_W//4),
+            StageModule(input_branches=4, output_branches=4, c=base_channel,H=in_H//self.n_stem,W=in_W//4),
             # StageModule(input_branches=4, output_branches=4, c=base_channel),
             # StageModule(input_branches=4, output_branches=4, c=base_channel,H=in_H//4,W=in_W)
         )
@@ -484,6 +501,7 @@ class HighResolutionNet(nn.Module):
         # self.final_layer = nn.Conv2d(base_channel, num_joints, kernel_size=1, stride=1)
 
     def forward(self, x):
+        # print(self.)
         B,C,H,W = x.size()
         x = self.conv1(x)
         x = self.bn1(x)
@@ -498,6 +516,7 @@ class HighResolutionNet(nn.Module):
 
         # for i,n in enumerate(x):
         #     print("stage1,layer{}".format(i+1),n.shape)
+
         x = self.stage2(x)
 
         x = [
@@ -505,11 +524,26 @@ class HighResolutionNet(nn.Module):
             self.transition2[1](x[1]),
             self.transition2[2](x[-1])
         ]  # New branch derives from the "upper" branch only
-        print('-'*19)
+        # print('-'*19)
+
         # for i,n in enumerate(x):
         #     print("stage2,layer{}".format(i+1),n.shape)
+
+        x = [
+            self.conv_stage2[0](x[0]),
+            self.conv_stage2[1](x[1]),
+            self.conv_stage2[2](x[-1])
+             ]  # 经过conv将横向分辨率缩小
+
+        # for i,n in enumerate(x):
+        #     print("stage2,layer{}".format(i+1),n.shape)
+
         x = self.stage3(x)
-        print('-' * 19)
+
+        # for i in range(len(x)):
+        #     print('stage:x{}'.format(i),x[i].shape)
+
+        # print('-' * 19)
         x = [
             self.transition3[0](x[0]),
             self.transition3[1](x[1]),
@@ -517,17 +551,30 @@ class HighResolutionNet(nn.Module):
             self.transition3[3](x[-1]),
         ]  # New branch derives from the "upper" branch only
 
+        # for i,n in enumerate(x):
+        #     print("stage3,layer{}".format(i+1),n.shape)
+
+        x = [
+            self.conv_stage3[0](x[0]),
+            self.conv_stage3[1](x[1]),
+            self.conv_stage3[2](x[2]),
+            self.conv_stage3[3](x[-1])
+             ]  # 经过conv将横向分辨率缩小
+
+        # for i,n in enumerate(x):
+        #     print("stage3,layer{}".format(i+1),n.shape)
+
         x = self.stage4(x)
-        print('-' * 19)
+        # print('-' * 19)
         # Upsampling
         x0_h, x0_w = x[0].size(2), x[0].size(3)
-        x0 = F.interpolate(x[0], size=(H, W),
+        x0 = F.interpolate(x[0], size=(H, W//4),
                            mode='bilinear', align_corners=True)
-        x1 = F.interpolate(x[1], size=(H, W),
+        x1 = F.interpolate(x[1], size=(H, W//4),
                            mode='bilinear', align_corners=True)
-        x2 = F.interpolate(x[2], size=(H, W),
+        x2 = F.interpolate(x[2], size=(H, W//4),
                            mode='bilinear', align_corners=True)
-        x3 = F.interpolate(x[3], size=(H, W),
+        x3 = F.interpolate(x[3], size=(H, W//4),
                            mode='bilinear', align_corners=True)
 
         # print(x[0].shape,x1.shape,x2.shape,x3.shape)
@@ -567,19 +614,20 @@ def hr_ocr_w32(in_channel,out_channel):
     return HighResolutionNet(base_channel=32,input_channel=in_channel, num_classes=out_channel), hr_ocr_w32.__name__
 def hr_ocr_w18(in_channel,out_channel):
     return HighResolutionNet(base_channel=18,input_channel=in_channel, num_classes=out_channel), hr_ocr_w18.__name__
-def hr_ocr_w(base_channel,in_channel,out_channel,H,W):
+def hr_ocr_axial_w(base_channel,in_channel,out_channel,H,W):
     return HighResolutionNet(base_channel=base_channel,input_channel=in_channel,
                              num_classes=out_channel,
-                             in_H=H, in_W=W), hr_ocr_w.__name__
+                             in_H=H, in_W=W), hr_ocr_axial_w.__name__
 
 
 if __name__ == '__main__':
     device = torch.device('cuda')
-    batch_size = 2
+    batch_size = 5
     in_channel, out_channel = 1, 7
     base_channel = 8
     H,W = 6144,5
-    used_model,name = hr_ocr_w(base_channel,in_channel,out_channel,H,W)
+    # print(W//2)
+    used_model,name = hr_ocr_axial_w(base_channel,in_channel,out_channel,H,W)
     used_model = used_model.to(device)
     print(name)
     input = torch.rand(batch_size,in_channel,H,W).to(device)

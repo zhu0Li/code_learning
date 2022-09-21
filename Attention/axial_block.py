@@ -335,10 +335,10 @@ class HRViTAxialBlock(nn.Module):
 if __name__ == '__main__':
     use_cuda = True
     device = torch.device("cuda" if use_cuda else "cpu")
-    input = torch.randn((1,8,32,5)).to(device)
+    input = torch.randn((1,8,32,3)).to(device)
     # input = torch.randn((4,640,128)).to(device)
     model =Axial_Layer(128,kernel_size=5,height_dim=False).to(device)
-    model_ = HRViTAxialBlock(in_dim=8,dim=8, H=32, W=5).to(device)
+    model_ = HRViTAxialBlock(in_dim=8,dim=8, H=32, W=3).to(device)
     # model1 = MixCFN(in_features=128).to(device)
     # summary(model_, input_size=(8,128,5))
     # summary(model1, input_size=[(128,128,5),128,5])
