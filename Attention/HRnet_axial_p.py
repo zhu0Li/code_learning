@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchsummary import summary
-from axial_block import HRViTAxialBlock
+from axial_block_parallel import HRViTAxialBlock
 
 BN_MOMENTUM = 0.1
 
@@ -287,7 +287,7 @@ class StageModule(nn.Module):
         self.branches = nn.ModuleList()
         for i in range(self.input_branches):  # 每个分支上都先通过4个BasicBlock
             w = c * (2 ** i)  # 对应第i个分支的通道数
-            if i >= 1:  # 在最高分辨率处还是使用原来的block，下面四个分辨率使用Attention block
+            if i >= 0:  # 在最高分辨率处还是使用原来的block，下面四个分辨率使用Attention block
                 branch = nn.Sequential(
                     HRViTAxialBlock(w, w, H=H // 2 ** i, W=W, heads=8,drop_path = 0.4,attn_drop=0.2, proj_drop=0.2,),
                     # HRViTAxialBlock(w, w, H=H // 2 ** i, W=W),
@@ -639,7 +639,7 @@ def hr_ocr_axial_w(base_channel, in_channel, out_channel, H, W):
 if __name__ == '__main__':
     device = torch.device('cuda')
     # device = torch.device('cpu')
-    batch_size = 4
+    batch_size = 2
     in_channel, out_channel = 1, 7
     base_channel = 24
     H, W = 3072, 5

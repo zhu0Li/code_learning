@@ -50,7 +50,7 @@ class Axial_Layer(nn.Module):
                  attn_drop=0., proj_drop=0.):
         super(Axial_Layer, self).__init__()
         self.depth = in_channels
-        self.num_heads = num_heads
+        self.num_heads = num_heads if (in_channels // num_heads)%2==0 else in_channels // num_heads
         self.kernel_size = kernel_size    ## Maximum local field on which Axial-Attention is applied
         self.stride = stride
         self.height_dim = height_dim
@@ -64,7 +64,7 @@ class Axial_Layer(nn.Module):
         # self.logits_bn = nn.BatchNorm2d(num_heads * 3).to(device)
         self.kqv_conv = nn.Conv1d(in_channels, self.depth * 2, kernel_size=1, bias=False)
         self.kqv_bn = nn.BatchNorm1d(self.depth * 2)
-        self.logits_bn = nn.BatchNorm2d(num_heads * 3)
+        self.logits_bn = nn.BatchNorm2d(self.num_heads * 3)
         # Positional encodings
         self.rel_encoding = nn.Parameter(torch.randn(self.dh * 2, kernel_size * 2 - 1), requires_grad=True)
         # key_index = torch.arange(kernel_size).to(device)
@@ -94,21 +94,36 @@ class Axial_Layer(nn.Module):
 
         # Compute q, k, v
         # kqv = self.kqv_conv(x).to(device)
+        # print('x',x.shape)
         kqv = self.kqv_conv(x)
         # print('kqv:',kqv.shape)
         kqv = self.kqv_bn(kqv)  # apply batch normalization on k, q, v
         # print(self.depth)
         # print(self.num_heads)
         # print(self.dh)
-        k, q, v = torch.split(kqv.reshape(batch_size * width, self.num_heads, self.dh * 2, height),
-                              [self.dh // 2, self.dh // 2, self.dh], dim=2)
+        if self.dh  == 3:
+            self.num_heads = 3
+            self.dh = self.depth // self.num_heads
+            k, q, v = torch.split(kqv.reshape(batch_size * width, self.num_heads, self.dh * 2, height),
+                                                             [self.dh // 2, self.dh // 2, self.dh], dim=2)
+        else:
+            k, q, v = torch.split(kqv.reshape(batch_size * width, self.num_heads, self.dh * 2, height),
+                                  [self.dh // 2, self.dh // 2, self.dh], dim=2)
+        # else:
+        #
         # print('k:{},q:{},v:{}'.format(k.shape,q.shape,v.shape))
         # Positional encodings
         rel_encodings = torch.index_select(self.rel_encoding, 1, self.distance_matrix).reshape(self.dh * 2,
                                                                                                self.kernel_size,
                                                                                                self.kernel_size)
         # print('rel_encodings: ',rel_encodings.shape)
-        q_encoding, k_encoding, v_encoding = torch.split(rel_encodings, [self.dh // 2, self.dh // 2, self.dh], dim=0)
+        if self.dh  == 3:
+            self.num_heads = 3
+            self.dh = self.depth // self.num_heads
+            q_encoding, k_encoding, v_encoding = torch.split(rel_encodings, [self.dh // 2, self.dh // 2, self.dh], dim=0)
+        else:
+            q_encoding, k_encoding, v_encoding = torch.split(rel_encodings, [self.dh // 2, self.dh // 2, self.dh],
+                                                             dim=0)
 
         # qk + qr + kr
         qk = torch.matmul(q.transpose(2, 3), k)
@@ -132,22 +147,21 @@ class Axial_Layer(nn.Module):
 
         attn = torch.matmul(weights, v.transpose(2, 3)).transpose(2, 3)
         attn_encoding = torch.einsum('bhxy,dxy->bhdx', weights, v_encoding)
-        attn_out = torch.cat([attn, attn_encoding], dim=-1).reshape(batch_size * width, self.depth * 2, height)
+        # print('attn',attn.shape)
+        attn_out = torch.cat([attn, attn_encoding], dim=-1)
+        # print('attn_out: ', attn_out.shape)
+        attn_out = attn_out.reshape(batch_size * width, self.depth * 2, height)
+        # print('attn_out: ', attn_out.shape)
         attn_out = self.proj_drop(attn_out)
         # print('attn_out: ', attn_out.shape)
         # # output = attn_out.reshape(batch_size, width, self.depth, 2, height).sum(dim=-2)
         # output = attn_out.reshape(batch_size, -1, 2, width).sum(dim=-2)
         #
-        # # if self.height_dim:
-        # #     output = output.permute(0, 2, 3, 1)
-        # # else:
-        # #     output = output.permute(0, 2, 1, 3)
-
+        output = attn_out.reshape(batch_size, width, self.depth, 2, height).sum(dim=-2)
         if self.height_dim:
-            output = attn_out.reshape(batch_size, width, self.depth, 2, height).sum(dim=-2)
             output = output.permute(0, 2, 3, 1)
         else:
-            output = attn_out.reshape(batch_size, -1, 2, height).sum(dim=-2)
+            output = output.permute(0, 2, 1, 3)
 
         return output
 
@@ -250,6 +264,7 @@ class HRViTAxialBlock(nn.Module):
 
         # build layer normalization
         self.attn_norm = nn.LayerNorm(in_dim)
+        self.attn_norm_2 = nn.LayerNorm(in_dim//2)
 
         # build attention layer
         # self.attn = HRViTAttention(
@@ -261,9 +276,9 @@ class HRViTAxialBlock(nn.Module):
         #     with_cp=with_cp,
         # )
         self.attnh = Axial_Layer(
-            in_channels=in_dim,
+            in_channels=in_dim//2,
             kernel_size=H,
-            num_heads=heads,
+            num_heads=heads//2,
             # ws=ws,
             height_dim=True,
             attn_drop=attn_drop,
@@ -271,9 +286,9 @@ class HRViTAxialBlock(nn.Module):
             # with_cp=with_cp,
         )
         self.attnw = Axial_Layer(
-            in_channels=in_dim,
+            in_channels=in_dim//2,
             kernel_size=W,
-            num_heads=heads,
+            num_heads=heads//2,
             # ws=ws,
             height_dim=False,
             attn_drop=attn_drop,
@@ -317,14 +332,27 @@ class HRViTAxialBlock(nn.Module):
         x = self.attn_norm(x)
         x = x.permute(0, 3, 1,2)
         # print('2',x.shape)
-        x = self.attnh(x)
+
+        # * 实现并行的Axial_Attention
+        x1, x2 = x[:, 0:C // 2, :, :], x[:, C // 2:, :, :]
+        # print(x1.shape,x2.shape)
+        x1 = self.attnh(x1)
         # print('3',x.shape)
-        x = x.permute(0, 2, 3, 1)
+        x1 = x1.permute(0, 2, 3, 1)
         # print('4',x.shape)
-        x = self.attn_norm(x)
-        x = x.permute(0, 3, 1, 2)
+        x1 = self.attn_norm_2(x1)
+        x1 = x1.permute(0, 3, 1, 2)
         # print('5',x.shape)
-        x = self.attnw(x)
+        x2 = self.attnw(x2)
+        x2 = x2.permute(0, 2, 3, 1)
+        # print('4',x.shape)
+        x2 = self.attn_norm_2(x2)
+        x2 = x2.permute(0, 3, 1, 2)
+        # print('6',x1.shape,x2.shape)
+        # print('res',res.shape)
+        x = torch.cat((x1, x2), dim=1)
+        # *
+
         # print('6',x.shape)
         # print('res',res.shape)
         x_des = self.des(res)
