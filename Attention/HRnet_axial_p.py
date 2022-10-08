@@ -1,14 +1,12 @@
 import math
-import functools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchsummary import summary
 from axial_block_parallel import HRViTAxialBlock
 
 BN_MOMENTUM = 0.1
 
-from lib.bn_helper import BatchNorm2d, BatchNorm2d_class, relu_inplace
+from lib.bn_helper import  relu_inplace
 
 
 class SamePad2d(nn.Module):
