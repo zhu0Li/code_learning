@@ -6,7 +6,7 @@ from axial_block_parallel import HRViTAxialBlock
 
 BN_MOMENTUM = 0.1
 
-from lib.bn_helper import  relu_inplace
+from ..lib.bn_helper import  relu_inplace
 
 
 class SamePad2d(nn.Module):
