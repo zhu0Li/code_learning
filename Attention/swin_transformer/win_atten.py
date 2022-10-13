@@ -1,9 +1,26 @@
 #窗口注意力
+from typing import Tuple
 import torch
 from torch import nn
 from timm.models.layers import  trunc_normal_
 
+def window_partition(x, window_size: Tuple[int]):
+    """
+    将feature map按照window_size划分成一个个没有重叠的window
+    Args:
+        x: (B, H, W, C)
+        window_size (int): window size(M)
 
+    Returns:
+        windows: (num_windows*B, window_size, window_size, C)
+    """
+    B, H, W, C = x.shape
+    window_size_H,window_size_W = window_size[0],window_size[1]
+    x = x.view(B, H // window_size_H, window_size_H, W // window_size_W, window_size_W, C)
+    # permute: [B, H//Mh, Mh, W//Mw, Mw, C] -> [B, H//Mh, W//Mh, Mw, Mw, C]
+    # view: [B, H//Mh, W//Mw, Mh, Mw, C] -> [B*num_windows, Mh, Mw, C]
+    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size_H, window_size_W, C)
+    return windows
 
 class WindowAttention(nn.Module):
     r""" Window based multi-head self attention (W-MSA) module with relative position bias.
@@ -114,7 +131,10 @@ if __name__ == '__main__':
     use_cuda = True
     device = torch.device("cuda" if use_cuda else "cpu")
     input = torch.randn((1,8,32,5)).to(device)
+    x = torch.randn((1,3,32,5)).permute(0,2,3,1)
     # input = torch.randn((4,640,128)).to(device)
+    win_p = window_partition(x,window_size=[8,5])
+    print(win_p.shape)
     model =WindowAttention(8,window_size=[5,5],num_heads=4,).to(device)
     # model_ = HRViTAxialBlock(in_dim=8,dim=8, H=32, W=5).to(device)
     # model1 = MixCFN(in_features=128).to(device)
