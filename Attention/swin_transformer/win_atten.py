@@ -45,8 +45,9 @@ class WindowAttention(nn.Module):
         super().__init__()
         self.dim = dim#96*(2^layer_index 0,1,2,3...)
         self.window_size = window_size  # Wh, Ww (7,7)
-        self.num_heads = num_heads#[3, 6, 12, 24]
-        head_dim = dim // num_heads#(96//3=32,96*2^1 // 6=32,...)
+        # self.num_heads = num_heads#[3, 6, 12, 24]
+        self.num_heads = num_heads if (dim // num_heads) % 2 == 0 else dim // num_heads
+        head_dim = dim // self.num_heads#(96//3=32,96*2^1 // 6=32,...)
         self.scale = qk_scale or head_dim ** -0.5#default：head_dim ** -0.5
 
         # define a parameter table of relative position bias
@@ -113,11 +114,13 @@ class WindowAttention(nn.Module):
             x: input features with shape of (num_windows*B, N, C)
             mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
         """
+        B_o, C_o, H_o, W_o = x.shape  # BCHW
         x = self.window_partition(x)
-        B,C_,H,W = x.shape  # BCHW
+        B, C_, H, W = x.shape  # BCHW
         x = x.permute(0,2,3,1).reshape(B,H*W,C_) # BCHW->BHWC->B,H*W,C
         B_, N, C = x.shape#输入特征的尺寸
         #(3, B_, num_heads, N, C // num_heads)
+
         qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         # q/k/v: [B_, num_heads, N, C // num_heads]
         # print("qkv:", qkv.shape)
@@ -153,7 +156,7 @@ class WindowAttention(nn.Module):
         x = self.proj(x)
         #进行drop out
         x = self.proj_drop(x)
-        x = x.reshape(B,C_,H,W)
+        x = x.reshape(B_o, C_o, H_o, W_o)
         return x
 
 

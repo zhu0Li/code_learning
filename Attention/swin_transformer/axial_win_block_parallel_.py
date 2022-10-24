@@ -186,8 +186,7 @@ class WindowAttention(nn.Module):
         super().__init__()
         self.dim = dim  # 96*(2^layer_index 0,1,2,3...)
         self.window_size = window_size  # Wh, Ww (7,7)
-        # self.num_heads = num_heads  # [3, 6, 12, 24]
-        self.num_heads = num_heads if (dim // num_heads) % 2 == 0 else dim // num_heads
+        self.num_heads = num_heads  # [3, 6, 12, 24]
         head_dim = dim // num_heads  # (96//3=32,96*2^1 // 6=32,...)
         self.scale = qk_scale or head_dim ** -0.5  # default：head_dim ** -0.5
 
@@ -195,7 +194,7 @@ class WindowAttention(nn.Module):
         # 定义相对位置偏置表格
         # [(2*7-1)*(2*7-1),3]
         self.relative_position_bias_table = nn.Parameter(
-            torch.zeros((2 * window_size[0] - 1) * (2 * window_size[1] - 1), self.num_heads))  # 2*Wh-1 * 2*Ww-1, nH
+            torch.zeros((2 * window_size[0] - 1) * (2 * window_size[1] - 1), num_heads))  # 2*Wh-1 * 2*Ww-1, nH
 
         # get pair-wise relative position index for each token inside the window
         # 得到一对在窗口中的相对位置索引
@@ -256,14 +255,11 @@ class WindowAttention(nn.Module):
             mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
         """
         B_o, C_o, H_o, W_o = x.shape  # BCHW
-        # print(B_o, C_o, H_o, W_o)
         x = self.window_partition(x)
         B, C_, H, W = x.shape  # BCHW
         x = x.permute(0, 2, 3, 1).reshape(B, H * W, C_)  # BCHW->BHWC->B,H*W,C
         B_, N, C = x.shape  # 输入特征的尺寸
         # (3, B_, num_heads, N, C // num_heads)
-        # print(B_,N,C)
-        # print(self.num_heads)
         qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         # q/k/v: [B_, num_heads, N, C // num_heads]
         # print("qkv:", qkv.shape)
@@ -273,7 +269,6 @@ class WindowAttention(nn.Module):
         q = q * self.scale
         # attn:B_, num_heads,N,N
         attn = (q @ k.transpose(-2, -1))
-        # print('attn:',attn.shape)
         # 在 随机在relative_position_bias_table中的第一维(169)选择position_index对应的值，共49*49个
         # 由于relative_position_bias_table第二维为 nHeads所以最终表变为了 49*49*nHead 的随机表
         relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
@@ -281,9 +276,8 @@ class WindowAttention(nn.Module):
         # print(relative_position_bias.shape)
         relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
         # attn每一个批次，加上随机的相对位置偏移 说明attn.shape=B_,num_heads,Wh*Ww, Wh*Ww
-        # print('relative_position_bias: ',relative_position_bias.shape)
+        # print(attn.shape,relative_position_bias.shape)
         attn = attn + relative_position_bias.unsqueeze(0)
-        # print('attn:', attn.shape)
         # mask 在某阶段的奇数层为None 偶数层才存在
         if mask is not None:
             nW = mask.shape[0]
@@ -296,8 +290,6 @@ class WindowAttention(nn.Module):
         attn = self.attn_drop(attn)
         # attn @ v：B_, num_heads, N, C/num_heads
         # x: B_, N, C 其中
-        # print(attn.shape,v.shape)
-        # print((attn @ v).shape)
         x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
         # 经过一层全连接
         x = self.proj(x)
@@ -410,9 +402,8 @@ class HRViTAxialBlock(nn.Module):
         # build layer normalization
         self.attn_norm = nn.LayerNorm(in_dim)
         self.attn_norm_2 = nn.LayerNorm(in_dim//2)
-        self.attn_norm_4 = nn.LayerNorm(in_dim//4)
-        # self.convup = nn.Conv2d(in_dim,in_dim*3//2,1,1,0)
-        # self.convdown = nn.Conv2d(in_dim*3//2, in_dim, 1, 1, 0)
+        self.convup = nn.Conv2d(in_dim,in_dim*3//2,1,1,0)
+        self.convdown = nn.Conv2d(in_dim*3//2, in_dim, 1, 1, 0)
         # build attention layer
         # self.attn = HRViTAttention(
         #     in_dim=in_dim,
@@ -433,7 +424,7 @@ class HRViTAxialBlock(nn.Module):
             # with_cp=with_cp,
         )
         self.attnw = Axial_Layer(
-            in_channels=in_dim//4,
+            in_channels=in_dim//2,
             kernel_size=W,
             num_heads=heads//2,
             # ws=ws,
@@ -443,7 +434,7 @@ class HRViTAxialBlock(nn.Module):
             # with_cp=with_cp,
         )
         self.attn_win = WindowAttention(
-            dim = in_dim//4,
+            dim = in_dim//2,
             window_size = window_size,
             num_heads = heads//2,
             attn_drop=attn_drop,
@@ -489,10 +480,10 @@ class HRViTAxialBlock(nn.Module):
 
         # * 实现并行的Axial_win_Attention
         #* 将通道分为3部分
-        # x = self.convup(x)
-        # C_ = C*3//2
+        x = self.convup(x)
+        C_ = C*3//2
         # print('x', x.shape)
-        x1, x2, x3 = x[:, 0:C // 2, :, :], x[:, C // 2:C*3 // 4, :, :], x[:, C*3 // 4:, :, :]
+        x1, x2, x3 = x[:, 0:C_ // 3, :, :], x[:, C_ // 3:C_*2 // 3, :, :], x[:, C_*2 // 3:, :, :]
         # print(x1.shape,x2.shape,x3.shape)
 
         x1 = self.attnh(x1)
@@ -505,13 +496,13 @@ class HRViTAxialBlock(nn.Module):
         x2 = self.attnw(x2)
         x2 = x2.permute(0, 2, 3, 1)  # BHWC
         # print('4',x.shape)
-        x2 = self.attn_norm_4(x2)
+        x2 = self.attn_norm_2(x2)
         x2 = x2.permute(0, 3, 1, 2)  # BCHW
 
         x3 = self.attn_win(x3)
         x3 = x3.permute(0, 2, 3, 1)  # BHWC
         # print('4',x.shape)
-        x3 = self.attn_norm_4(x3)
+        x3 = self.attn_norm_2(x3)
         x3 = x3.permute(0, 3, 1, 2)  # BCHW
 
         # print('6',x1.shape,x2.shape)
@@ -519,7 +510,7 @@ class HRViTAxialBlock(nn.Module):
         # print(x1.shape,x2.shape,x3.shape)
         x = torch.cat((x1, x2, x3), dim=1)
         # *
-        # x = self.convdown(x)
+        x = self.convdown(x)
         # print('6',x.shape)
         # print('res',res.shape)
         x_des = self.des(res)

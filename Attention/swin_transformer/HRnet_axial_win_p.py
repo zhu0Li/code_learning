@@ -6,7 +6,7 @@ from axial_win_block_parallel import HRViTAxialBlock
 
 BN_MOMENTUM = 0.1
 
-from ..lib.bn_helper import  relu_inplace
+from lib.bn_helper import  relu_inplace
 
 
 class SamePad2d(nn.Module):
@@ -287,7 +287,8 @@ class StageModule(nn.Module):
             w = c * (2 ** i)  # 对应第i个分支的通道数
             if i >= 0:  # 在最高分辨率处还是使用原来的block，下面四个分辨率使用Attention block
                 branch = nn.Sequential(
-                    HRViTAxialBlock(w, w, H=H // 2 ** i, W=W, heads=8,drop_path = 0.4,attn_drop=0.2, proj_drop=0.2,),
+                    HRViTAxialBlock(w, w, H=H // 2 ** i, W=W, heads=8, window_size=[32// 2 ** i,W],
+                                    drop_path = 0.4,attn_drop=0.2, proj_drop=0.2,),
                     # HRViTAxialBlock(w, w, H=H // 2 ** i, W=W),
                     # HRViTAxialBlock(w, w, H=H // 2 ** i, W=W),
                     # HRViTAxialBlock(w, w, H=H // 2 ** i, W=W),
@@ -628,10 +629,10 @@ def hr_ocr_w18(in_channel, out_channel):
     return HighResolutionNet(base_channel=18, input_channel=in_channel, num_classes=out_channel), hr_ocr_w18.__name__
 
 
-def hr_ocr_axial_w(base_channel, in_channel, out_channel, H, W):
+def hr_ocr_axial_win_p_w(base_channel, in_channel, out_channel, H, W):
     return HighResolutionNet(base_channel=base_channel, input_channel=in_channel,
                              num_classes=out_channel,
-                             in_H=H, in_W=W), hr_ocr_axial_w.__name__
+                             in_H=H, in_W=W), hr_ocr_axial_win_p_w.__name__
 
 
 if __name__ == '__main__':
@@ -642,7 +643,7 @@ if __name__ == '__main__':
     base_channel = 24
     H, W = 3072, 5
     # print(W//2)
-    used_model, name = hr_ocr_axial_w(base_channel, in_channel, out_channel, H, W)
+    used_model, name = hr_ocr_axial_win_p_w(base_channel, in_channel, out_channel, H, W)
     used_model = used_model.to(device)
     print(name)
     input = torch.rand(batch_size, in_channel, H, W).to(device)
